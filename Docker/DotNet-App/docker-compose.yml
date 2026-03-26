@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  dotnet-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dotnet-webapp
+    restart: always
+    ports:
+      - "8084:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=appdb;Username=appuser;Password=app_password
+    depends_on:
+      - postgres
+    networks:
+      - dotnet_network
+    volumes:
+      - ./logs:/app/logs
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dotnet_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: app_password
+      POSTGRES_DB: appdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - dotnet_network
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: dotnet_pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin_password
+    ports:
+      - "8085:80"
+    depends_on:
+      - postgres
+    networks:
+      - dotnet_network
+
+volumes:
+  postgres_data:
+
+networks:
+  dotnet_network:
+    driver: bridge

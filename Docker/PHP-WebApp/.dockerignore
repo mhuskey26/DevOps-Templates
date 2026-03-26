@@ -1,0 +1,14 @@
+*.md
+.git
+.gitignore
+.env
+.env.local
+docker-compose.yml
+Dockerfile
+*.log
+vendor/
+node_modules/
+.vscode/
+.idea/
+tests/
+*.test.php

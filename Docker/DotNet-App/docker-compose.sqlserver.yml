@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  dotnet-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dotnet-webapp-mssql
+    restart: always
+    ports:
+      - "8084:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=AppDB;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True
+    depends_on:
+      - sqlserver
+    networks:
+      - dotnet_network
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: dotnet_sqlserver
+    restart: always
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: "YourStrong!Passw0rd"
+      MSSQL_PID: "Express"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    ports:
+      - "1433:1433"
+    networks:
+      - dotnet_network
+
+volumes:
+  sqlserver_data:
+
+networks:
+  dotnet_network:
+    driver: bridge

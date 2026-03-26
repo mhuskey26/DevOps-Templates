@@ -1,0 +1,6 @@
+project_id    = "your-project-id"
+bucket_prefix = "webapp-data"
+domain        = "devopsdeployed.com"
+db_name       = "mydb"
+db_user       = "webapp_user"
+# db_pass = "SecurePass123!"

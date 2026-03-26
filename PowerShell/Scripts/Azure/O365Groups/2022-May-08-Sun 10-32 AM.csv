@@ -1,0 +1,18 @@
+"GroupName","GroupEmailAddress","Member","MemberEmail","MemberType"
+"All Staff","allcompany@SkeptikStudiosLLC.onmicrosoft.com","Michael Huskey","mhuskey@skeptikstudios.com","User"
+"Service Account",,"No Members","-",
+"MFA-Required",,"Michael Huskey","mhuskey@skeptikstudios.com","User"
+"MFA-Required",,"Game Production",,"Group"
+"MFA-Required",,"Marketing",,"Group"
+"AWSDevOps",,"Michael Huskey","mhuskey@skeptikstudios.com","User"
+"AWSDevOps",,"AWSDevOps",,"Group"
+"BillingAdmins",,"No Members","-",
+"Bata Testers",,"No Members","-",
+"Freelancer",,"No Members","-",
+"Game Production",,"Michael Huskey","mhuskey@skeptikstudios.com","User"
+"Game Development","gamedev@skeptikstudios.com","No Members","-",
+"Marketing",,"Michael Huskey","mhuskey@skeptikstudios.com","User"
+"Marketing",,"Marketing",,"Group"
+"MFA-Excempt",,"Service Account",,"Group"
+"Marketing Team","marketingteam@skeptikstudios.com","No Members","-",
+"All-Skeptik","allskeptik@skeptikstudios.com","Michael Huskey","mhuskey@skeptikstudios.com","User"

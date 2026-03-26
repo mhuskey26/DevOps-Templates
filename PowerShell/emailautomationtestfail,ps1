@@ -1,0 +1,86 @@
+param(
+[string]$SendEmail,
+[string]$emailRecip,
+[string]$path,
+[string]$body,
+[string]$subject
+)
+
+##OCTO Vars
+$SendEmail = $OctopusParameters['Octopus.Action[Step2].Output.SendEmail']
+$emailRecip = ($OctopusParameters['emailRecip']).split(",")
+$subject = $OctopusParameters['subject']
+$path = $OctopusParameters['attachmentFile']
+$body = $OctopusParameters['emailBody']
+
+##Vars
+$logTitle = "$($subject)"
+
+function GetFormattedEmailBody($body){
+##Create a HTML formatted email body
+$formattedBody = @"
+<html>
+  <head>
+    <title>Title of the document</title>
+    <style>
+      table {
+        border-collapse: collapse;
+      }
+      td,
+      th{
+        padding: 5px;
+        text-align: center;
+        style: bold;
+      }
+      td{
+        color: red;
+        text-align: left;
+      }
+    </style>
+  </head>
+  <body>
+    <table border="1">
+      <tr>
+        <b>
+        <th>$($logTitle)</th>
+          </b>
+      </tr>
+      <tr>
+        <td>
+          <font color="red">
+            <b>
+              $($body.replace("`r`n", "<br>"))
+             </b>
+          </font>
+          </td>
+      </tr>
+      <tr>
+      </tr>
+    </table>
+  </body>
+</html>
+"@
+
+##Return the formatted email bdoy
+return $formattedBody
+
+}
+
+##Find the most recenlty written log file 
+$logFile = Get-ChildItem $path -File | Sort {$_.lastwritetime} | Where {$_ -like "*Test*"} | Select -last 1
+
+
+##Read logfile
+$logFileDetails = Get-Content $path\$logFile -Raw
+
+##Format the email body 
+$Body = GetFormattedEmailBody($logFileDetails)
+
+Write-Host "Email Failure Log"
+
+##Send Email     
+Send-MailMessage -from "octopus@open-techs.com" `
+                   -to $emailRecip `
+                   -subject $logTitle `
+                   -body $emailBody `
+                   -smtpServer smtp-gateway.open-techs.local -BodyAsHtml                 
