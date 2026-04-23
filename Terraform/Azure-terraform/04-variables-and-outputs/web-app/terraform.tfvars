@@ -1,5 +1,0 @@
-storage_account_prefix = "webappdata"
-domain                 = "devopsdeployed.com"
-db_name                = "mydb"
-db_user                = "psqladmin"
-# db_pass = "SecurePass123!"
