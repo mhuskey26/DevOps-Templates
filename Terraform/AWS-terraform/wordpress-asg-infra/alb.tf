@@ -98,43 +98,9 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# ALB HTTPS Listener (optional)
-resource "aws_lb_listener" "https" {
-  count             = var.alb_enable_https ? 1 : 0
-  load_balancer_arn = aws_lb.main.arn
-  port              = "443"
-  protocol          = "HTTPS"
-  certificate_arn   = var.acm_certificate_arn
-  ssl_policy        = "ELBSecurityPolicy-TLS-1-2-2017-01"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.wordpress.arn
-  }
-}
-
-# Redirect HTTP to HTTPS (optional)
-resource "aws_lb_listener_rule" "http_to_https" {
-  count            = var.alb_enable_https ? 1 : 0
-  listener_arn     = aws_lb_listener.http.arn
-  priority         = 1
-
-  action {
-    type = "redirect"
-
-    redirect {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
-    }
-  }
-
-  condition {
-    path_pattern {
-      values = ["/*"]
-    }
-  }
-}
+# Note: HTTPS is handled by Cloudflare at the edge
+# ALB listens only on HTTP (port 80)
+# Cloudflare manages SSL/TLS certificates and redirects HTTP to HTTPS
 
 # CloudWatch Alarms for ALB
 resource "aws_cloudwatch_metric_alarm" "alb_unhealthy_hosts" {

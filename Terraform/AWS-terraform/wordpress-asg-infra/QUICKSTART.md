@@ -24,7 +24,14 @@ nano terraform.tfvars
 **Minimum changes needed:**
 ```hcl
 domain_name = "yourdomain.com"
+cloudflare_zone_id = "your-zone-id"  # Get from Cloudflare dashboard
+cloudflare_api_token = ""  # Set via environment variable instead
 rds_db_password = "GenerateASecurePassword123!@#"
+```
+
+**Set Cloudflare API token (recommended via environment variable):**
+```bash
+export TF_VAR_cloudflare_api_token="your-cloudflare-api-token"
 ```
 
 ### 2. Initialize and Deploy (10-15 minutes)
@@ -109,25 +116,29 @@ sudo mount -a
 
 ## Next Steps
 
-1. **Enable HTTPS:**
-   - Request ACM certificate
-   - Update `alb_enable_https = true`
-   - Set `acm_certificate_arn` to your certificate ARN
+1. **Configure Cloudflare DNS:**
+   - Log in to [Cloudflare dashboard](https://dash.cloudflare.com)
+   - Point your domain nameservers to Cloudflare
+   - Create DNS A record pointing to ALB (from `terraform output alb_dns_name`)
+   - Enable Cloudflare proxy (orange cloud)
+   - Cloudflare will auto-provision SSL/TLS certificate
 
-2. **Configure DNS:**
-   - Set `route53_zone_id` to your hosted zone ID
-
-3. **Scale up:**
+2. **Scale up:**
    - Update `asg_desired_capacity` or let auto-scaling handle it
 
-4. **Add monitoring:**
+3. **Add monitoring:**
    - Create SNS topics for alarm notifications
    - Set up CloudWatch dashboards
 
-5. **Backup strategy:**
+4. **Backup strategy:**
    - Configure RDS automated backups (default: 30 days)
    - Backup EFS to S3 regularly
    - Test restore procedures
+
+5. **Additional security:**
+   - Enable Cloudflare WAF rules
+   - Configure rate limiting in Cloudflare
+   - Set up page rules for caching optimization
 
 ## Documentation
 

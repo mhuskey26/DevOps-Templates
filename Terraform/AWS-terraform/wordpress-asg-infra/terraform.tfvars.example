@@ -16,12 +16,20 @@ private_db_subnet_cidrs     = ["10.0.21.0/24", "10.0.22.0/24", "10.0.23.0/24"]
 availability_zone_count     = 2
 enable_nat_gateway          = true
 
-# Domain and SSL Configuration
-domain_name          = "example.com"
-route53_zone_id      = ""  # Leave empty if using Route 53, or set to your hosted zone ID
-acm_certificate_arn  = ""  # Leave empty if not using HTTPS, or set to your ACM certificate ARN
+# Domain Configuration
+domain_name = "example.com"
 
-# ALB Configuration
+# Cloudflare Configuration
+# Get Zone ID from: https://dash.cloudflare.com/?to=/:account/domains/example.com
+cloudflare_zone_id = ""
+
+# Cloudflare API Token (IMPORTANT: Use environment variable, not this file!)
+# Set via: export TF_VAR_cloudflare_api_token="your-api-token"
+# Or create token at: https://dash.cloudflare.com/profile/api-tokens
+cloudflare_api_token = ""  # Set via environment variable!
+
+# Proxy traffic through Cloudflare (orange cloud) - recommended for HTTPS
+cloudflare_proxy_enabled = true
 alb_enable_https       = false  # Set to true if using ACM certificate
 alb_enable_logging     = true
 alb_log_retention_days = 30

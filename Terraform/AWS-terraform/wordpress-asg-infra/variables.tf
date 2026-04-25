@@ -82,24 +82,35 @@ variable "domain_name" {
   default     = "example.com"
 }
 
-variable "route53_zone_id" {
-  description = "Route 53 hosted zone ID (leave empty to skip DNS setup)"
+# Cloudflare Configuration
+variable "cloudflare_zone_id" {
+  description = "Cloudflare Zone ID for DNS management"
   type        = string
-  default     = ""
+
+  validation {
+    condition     = var.cloudflare_zone_id != ""
+    error_message = "Cloudflare Zone ID is required."
+  }
 }
 
-variable "acm_certificate_arn" {
-  description = "ARN of existing ACM certificate (leave empty to create without HTTPS)"
+variable "cloudflare_api_token" {
+  description = "Cloudflare API Token for authentication (use environment variable TF_VAR_cloudflare_api_token)"
   type        = string
-  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.cloudflare_api_token != ""
+    error_message = "Cloudflare API Token is required."
+  }
+}
+
+variable "cloudflare_proxy_enabled" {
+  description = "Enable Cloudflare proxy (orange cloud) for DNS records"
+  type        = bool
+  default     = true
 }
 
 # ALB Configuration
-variable "alb_enable_https" {
-  description = "Enable HTTPS on ALB"
-  type        = bool
-  default     = false
-}
 
 variable "alb_enable_logging" {
   description = "Enable ALB access logging to S3"

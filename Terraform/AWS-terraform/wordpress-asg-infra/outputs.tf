@@ -179,11 +179,7 @@ output "ami_name" {
   description = "AMI name used for instances"
 }
 
-# Route 53 Outputs (if configured)
-output "route53_record_fqdn" {
-  value       = var.route53_zone_id != "" ? aws_route53_record.wordpress[0].fqdn : "Not configured"
-  description = "FQDN of the WordPress site (if Route 53 is configured)"
-}
+# Route 53 and DNS configuration removed - using Cloudflare instead
 
 # IAM Outputs
 output "ec2_role_arn" {
@@ -235,11 +231,17 @@ output "next_steps" {
     - Bucket Name: ${aws_s3_bucket.wordpress.id}
     - For backups and media offload
 
-    ${var.route53_zone_id != "" ? "DNS: ${aws_route53_record.wordpress[0].fqdn}" : "Note: DNS not configured. Set route53_zone_id to enable."}
+    Cloudflare DNS Configuration:
+    1. Log in to Cloudflare dashboard (https://dash.cloudflare.com)
+    2. Add or select your domain (${var.domain_name})
+    3. Update nameservers to point to Cloudflare
+    4. Create DNS A record pointing to ALB: ${aws_lb.main.dns_name}
+    5. Enable proxy (orange cloud) in Cloudflare
+    6. Cloudflare will automatically issue SSL/TLS certificate
 
     Configure WordPress:
     1. Wait 2-3 minutes for EC2 instances to fully initialize
-    2. Navigate to http://${aws_lb.main.dns_name}
+    2. Once Cloudflare DNS is active, navigate to https://${var.domain_name}
     3. Complete WordPress installation wizard
     4. Configure site title and admin account
 
@@ -247,7 +249,8 @@ output "next_steps" {
     - All instances are in private subnets (no direct SSH)
     - Use AWS Systems Manager Session Manager for access
     - Database password is stored in state file (move to Secrets Manager for production)
-    - Enable HTTPS by updating alb_enable_https and acm_certificate_arn
+    - ALB listens on HTTP (port 80) only; Cloudflare handles HTTPS at the edge
+    - Cloudflare automatically manages SSL/TLS certificates
 
     To scale:
     - Update asg_desired_capacity and run: terraform apply

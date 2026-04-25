@@ -1,6 +1,6 @@
-# WordPress on AWS with ALB + ASG + EFS + RDS
+# WordPress on AWS with ALB + ASG + EFS + RDS + Cloudflare
 
-Enterprise-grade Terraform deployment for a highly available WordPress environment on AWS.
+Enterprise-grade Terraform deployment for a highly available WordPress environment on AWS with Cloudflare DNS and SSL/TLS management.
 
 ## Architecture
 
@@ -10,16 +10,15 @@ Enterprise-grade Terraform deployment for a highly available WordPress environme
 - Amazon EFS for shared WordPress content
 - Amazon RDS MySQL database
 - S3 bucket for backups and media offload
-- Route 53 for DNS (optional)
-- ACM for HTTPS certificates (optional)
+- **Cloudflare for DNS and HTTPS/SSL** (replaces Route 53 and ACM)
 
 ## Prerequisites
 
 - AWS Account with appropriate permissions
 - Terraform >= 1.0
 - AWS CLI configured with credentials
-- An existing Route 53 hosted zone (if using DNS via Terraform)
-- An existing ACM certificate or ability to create one (if using HTTPS)
+- **Cloudflare account with zone** for your domain
+- **Cloudflare API Token** for Terraform automation
 
 ## Directory Structure
 
@@ -38,7 +37,7 @@ Enterprise-grade Terraform deployment for a highly available WordPress environme
 ├── launch_template.tf               # EC2 launch template with user data
 ├── asg.tf                           # Auto Scaling Group
 ├── s3.tf                            # S3 bucket for backups
-├── route53.tf                       # Route 53 DNS configuration (optional)
+├── route53.tf                       # DNS managed by Cloudflare (not AWS)
 ├── outputs.tf                       # Output values
 ├── README.md                        # This file
 └── ../WORDPRESS-ASG-REFERENCE-ARCHITECTURE.md  # Architecture documentation
