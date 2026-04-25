@@ -101,8 +101,10 @@ nano terraform.tfvars  # or vim, code, etc.
 
 ```hcl
 # Domain configuration
-domain_name        = "yourdomain.com"
-route53_zone_id    = "Z1234567890ABC"  # Your hosted zone ID
+domain_name = "yourdomain.com"
+
+# Cloudflare configuration
+cloudflare_zone_id = "your-zone-id"  # Get from Cloudflare dashboard
 
 # Database credentials (DO NOT use example password)
 rds_db_password    = "GenerateASecurePassword123!@#"
@@ -120,7 +122,19 @@ vpc_cidr            = "10.0.0.0/16"
 availability_zone_count = 2      # 2 or 3 for HA
 ```
 
-### Step 4: Set Database Password Securely
+### Step 4: Configure Cloudflare API Token
+
+Set your Cloudflare API token as an environment variable (do NOT add to terraform.tfvars):
+
+```bash
+# Get token from: https://dash.cloudflare.com/profile/api-tokens
+export TF_VAR_cloudflare_api_token="your-cloudflare-api-token"
+
+# Verify it's set
+echo $TF_VAR_cloudflare_api_token
+```
+
+### Step 5: Set Database Password Securely
 
 ```bash
 # Option A: Environment variable
@@ -138,7 +152,7 @@ aws ssm put-parameter \
   --type SecureString
 ```
 
-### Step 5: Validate Configuration
+### Step 6: Validate Configuration
 
 ```bash
 # Validate Terraform syntax
@@ -153,7 +167,7 @@ terraform plan -out=tfplan
 # Review the plan output carefully!
 ```
 
-### Step 6: Deploy Infrastructure
+### Step 7: Deploy Infrastructure
 
 ```bash
 # Apply the configuration
@@ -165,7 +179,7 @@ rm tfplan
 
 **Deployment time:** 10-15 minutes
 
-### Step 7: Retrieve Outputs
+### Step 8: Retrieve Outputs
 
 ```bash
 # Show all outputs
@@ -177,7 +191,7 @@ terraform output rds_address
 terraform output efs_dns_name
 ```
 
-### Step 8: Configure WordPress
+### Step 9: Configure WordPress
 
 After deployment, WordPress takes 2-3 minutes to initialize. Then:
 
@@ -187,7 +201,7 @@ After deployment, WordPress takes 2-3 minutes to initialize. Then:
    echo "WordPress: http://$ALB_DNS"
    ```
 
-2. **Access WordPress installation:**
+2. **Access WordPress installation (using ALB DNS temporarily):**
    - Open `http://<ALB_DNS>` in your browser
    - Complete the WordPress installation wizard
    - Create admin user
@@ -198,44 +212,44 @@ After deployment, WordPress takes 2-3 minutes to initialize. Then:
    - Configure site settings
    - Add content
 
-### Step 9: Configure HTTPS (Recommended)
+### Step 10: Configure Cloudflare DNS and HTTPS
 
-For production, enable HTTPS:
+Cloudflare handles both DNS and HTTPS/SSL automatically:
 
-1. **Request ACM certificate:**
+1. **Log in to Cloudflare Dashboard:**
+   - Go to https://dash.cloudflare.com
+   - Select your domain (yourdomain.com)
+
+2. **Update Nameservers:**
+   - Cloudflare will show two nameservers to use
+   - Update your domain registrar to point to Cloudflare nameservers
+   - DNS propagation typically takes 5-30 minutes
+
+3. **Create DNS A Record:**
+   - In Cloudflare DNS settings, create an A record:
+     - Name: @ (or your domain name)
+     - Content: **ALB DNS name** (from terraform output)
+     - TTL: Auto
+     - Proxy status: **Proxied (orange cloud)** ← Important!
+
+4. **Create www Subdomain (optional):**
+   - Name: www
+   - Content: ALB DNS name
+   - Proxy status: Proxied (orange cloud)
+
+5. **Enable Cloudflare SSL/TLS:**
+   - Go to SSL/TLS settings
+   - Encryption mode: Full (recommended) or Flexible
+   - Cloudflare auto-provisions and renews certificates
+
+6. **Verify HTTPS is Working:**
    ```bash
-   aws acm request-certificate \
-     --domain-name yourdomain.com \
-     --subject-alternative-names "*.yourdomain.com" \
-     --validation-method DNS
+   # After DNS propagates and certificate is issued
+   curl -I https://yourdomain.com
+   # Should see: HTTP/2 200
    ```
 
-2. **Update Terraform variables:**
-   ```hcl
-   alb_enable_https      = true
-   acm_certificate_arn   = "arn:aws:acm:region:account:certificate/uuid"
-   ```
-
-3. **Reapply configuration:**
-   ```bash
-   terraform plan -out=tfplan
-   terraform apply tfplan
-   ```
-
-### Step 10: Configure DNS
-
-If using Route 53:
-
-```bash
-# Terraform already created the records if route53_zone_id was set
-# Verify:
-aws route53 list-resource-record-sets \
-  --hosted-zone-id Z1234567890ABC \
-  --query "ResourceRecordSets[?Name=='yourdomain.com.']"
-
-# If not created, enable in terraform.tfvars:
-# route53_zone_id = "Z1234567890ABC"
-```
+**Note:** DNS propagation and SSL certificate issuance typically take 5-30 minutes after nameserver change.
 
 ## Post-Deployment Configuration
 
