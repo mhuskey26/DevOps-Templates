@@ -1,0 +1,93 @@
+# Example Terraform Variables File for WordPress ASG Infrastructure
+# Copy this file to terraform.tfvars and update with your own values
+
+# AWS Region
+aws_region = "us-west-1"
+
+# Project Configuration
+project_name = "wordpress-asg"
+environment  = "prod"
+
+# Networking Configuration
+vpc_cidr                    = "10.0.0.0/16"
+public_subnet_cidrs         = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+private_app_subnet_cidrs    = ["10.0.11.0/24", "10.0.12.0/24", "10.0.13.0/24"]
+private_db_subnet_cidrs     = ["10.0.21.0/24", "10.0.22.0/24", "10.0.23.0/24"]
+availability_zone_count     = 2
+enable_nat_gateway          = true
+
+# Domain and SSL Configuration
+domain_name          = "example.com"
+route53_zone_id      = ""  # Leave empty if using Route 53, or set to your hosted zone ID
+acm_certificate_arn  = ""  # Leave empty if not using HTTPS, or set to your ACM certificate ARN
+
+# ALB Configuration
+alb_enable_https       = false  # Set to true if using ACM certificate
+alb_enable_logging     = true
+alb_log_retention_days = 30
+
+# EC2 Instance Configuration
+instance_type       = "t3.small"
+root_volume_size    = 30
+root_volume_type    = "gp3"
+root_volume_iops    = 3000
+root_volume_throughput = 125
+
+# Auto Scaling Group Configuration
+asg_min_size                  = 2
+asg_max_size                  = 6
+asg_desired_capacity          = 3
+asg_health_check_type         = "ELB"
+asg_health_check_grace_period = 300
+asg_default_cooldown          = 300
+
+# EFS Configuration
+efs_performance_mode             = "generalPurpose"
+efs_throughput_mode              = "bursting"
+efs_provisioned_throughput_mibps = 100  # Only used if throughput_mode is "provisioned"
+efs_enable_encryption            = true
+
+# RDS Configuration
+rds_engine_version               = "8.0.35"
+rds_instance_class               = "db.t4g.small"
+rds_allocated_storage            = 50
+rds_storage_type                 = "gp3"
+rds_iops                         = 3000
+rds_storage_throughput           = 125
+rds_backup_retention_days        = 30
+rds_backup_window                = "03:00-04:00"
+rds_maintenance_window           = "mon:04:00-mon:05:00"
+rds_enable_cloudwatch_logs       = ["error", "general", "slowquery"]
+rds_enable_enhanced_monitoring   = true
+rds_monitoring_interval          = 60
+rds_multi_az                     = true
+rds_db_name                      = "wordpress"
+rds_db_username                  = "wpadmin"
+
+# RDS Password - IMPORTANT SECURITY NOTE:
+# Do NOT put your actual password here. Instead:
+# 1. Set it via environment variable: export TF_VAR_rds_db_password="YourPassword123!@#"
+# 2. Or use AWS Secrets Manager to store it
+# 3. Or use 'terraform apply -var="rds_db_password=..."'
+# The default is just a placeholder and MUST be changed before applying.
+rds_db_password = "ChangeMe123!@#"
+
+# S3 Configuration
+s3_enable_versioning = true
+s3_enable_logging    = true
+s3_log_retention_days = 30
+s3_enable_encryption = true
+
+# WordPress Configuration
+wordpress_admin_email = "admin@example.com"
+wordpress_site_title  = "My WordPress Site"
+
+# Monitoring and Access
+enable_cloudwatch_alarms      = true
+enable_systems_manager_access = true
+
+# Additional Tags (applied to all resources)
+additional_tags = {
+  CostCenter = "Engineering"
+  Owner      = "DevOps Team"
+}
