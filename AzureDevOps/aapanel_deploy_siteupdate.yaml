@@ -1,0 +1,163 @@
+trigger: none
+pr: none
+
+variables:
+- template: variables.yaml
+
+parameters:
+- name: versionOverride
+    type: string
+    default: ''
+- name: dryRunOnly
+    type: boolean
+    default: true
+
+pool:
+    vmImage: $(vmImage)
+
+stages:
+- stage: Deploy
+    displayName: Package and Deploy to aaPanel
+    jobs:
+    - job: PackageAndDeploy
+        timeoutInMinutes: 40
+        steps:
+        - checkout: self
+            clean: true
+
+        - bash: |
+                set -euo pipefail
+
+                WORK_DIR="$(Build.SourcesDirectory)"
+                if [ -n "$(gitRepoUrl)" ]; then
+                    echo "Cloning external repo: $(gitRepoUrl) @ $(gitBranch)"
+                    git clone --depth 1 --branch "$(gitBranch)" "$(gitRepoUrl)" "$(Build.SourcesDirectory)/repo-src"
+                    WORK_DIR="$(Build.SourcesDirectory)/repo-src"
+                else
+                    echo "Using self repository checkout"
+                fi
+
+                echo "##vso[task.setvariable variable=WORK_DIR]$WORK_DIR"
+                echo "##vso[task.setvariable variable=SERVER_SCRIPT_DIR]$(serverSiteRoot)"
+                echo "##vso[task.setvariable variable=SERVER_UPDATE_DIR]$(serverSiteRoot)/updates"
+            displayName: Resolve Source and Paths
+
+        - bash: |
+                set -euo pipefail
+
+                test -d "$(WORK_DIR)/$(sourcePath)" || { echo "Missing source path: $(WORK_DIR)/$(sourcePath)"; exit 1; }
+                test -f "$(WORK_DIR)/$(updateScriptLocal)" || { echo "Missing update script: $(WORK_DIR)/$(updateScriptLocal)"; exit 1; }
+            displayName: Validate Inputs
+
+        - bash: |
+                set -euo pipefail
+
+                VERSION="${{ parameters.versionOverride }}"
+
+                if [ -z "$VERSION" ] && [ -f "$(WORK_DIR)/$(versionFile)" ]; then
+                    if grep -q "\\$wp_version" "$(WORK_DIR)/$(versionFile)"; then
+                        VERSION=$(grep -oP "\\$wp_version\\s*=\\s*'\\K[^']+" "$(WORK_DIR)/$(versionFile)" | head -1 || true)
+                    fi
+                    if [ -z "$VERSION" ] && grep -q "APP_VERSION" "$(WORK_DIR)/$(versionFile)"; then
+                        VERSION=$(grep -oP "define\\('APP_VERSION',\\s*'\\K[^']+" "$(WORK_DIR)/$(versionFile)" | head -1 || true)
+                    fi
+                fi
+
+                if [ -z "$VERSION" ]; then
+                    SHORT_SHA="$(echo '$(Build.SourceVersion)' | cut -c1-8)"
+                    VERSION="build-$(Build.BuildId)-${SHORT_SHA}"
+                fi
+
+                SAFE_VERSION="$(echo "$VERSION" | tr -c '0-9A-Za-z._-' '-')"
+                PACKAGE_NAME="$(releasePrefix)-v${SAFE_VERSION}.zip"
+                PACKAGE_PATH="$(Build.ArtifactStagingDirectory)/${PACKAGE_NAME}"
+
+                echo "##vso[task.setvariable variable=APP_VERSION]$SAFE_VERSION"
+                echo "##vso[task.setvariable variable=PACKAGE_NAME]$PACKAGE_NAME"
+                echo "##vso[task.setvariable variable=PACKAGE_PATH]$PACKAGE_PATH"
+            displayName: Resolve Version and Package Name
+
+        - bash: |
+                set -euo pipefail
+
+                STAGING="$(mktemp -d)"
+                trap 'rm -rf "$STAGING"' EXIT
+
+                cp -r "$(WORK_DIR)/$(sourcePath)" "$STAGING/site"
+
+                EXCLUDE_NAMES=(
+                    ".git" ".github" ".vscode" "node_modules" "tests" "test"
+                    "__pycache__" ".DS_Store" "Thumbs.db" ".env" ".env.*"
+                )
+                for NAME in "${EXCLUDE_NAMES[@]}"; do
+                    find "$STAGING/site" -name "$NAME" -exec rm -rf {} + 2>/dev/null || true
+                done
+
+                find "$STAGING/site" -name "*.pyc" -exec rm -f {} + 2>/dev/null || true
+                mkdir -p "$STAGING/site/wp-content/uploads"
+                mkdir -p "$STAGING/site/wp-content/cache"
+                mkdir -p "$STAGING/site/wp-content/upgrade"
+
+                find "$STAGING/site" -type f \
+                    \( -name "*.tmp" -o -name "*.log" -o -name "*.cache" \) \
+                    -delete 2>/dev/null || true
+
+                if [ "$(excludeWpUploads)" = "true" ]; then
+                    rm -rf "$STAGING/site/wp-content/uploads" || true
+                fi
+
+                cd "$STAGING"
+                zip -r "$(PACKAGE_PATH)" site -x "*.DS_Store"
+                ls -lh "$(PACKAGE_PATH)"
+            displayName: Package Site
+
+        - task: SSH@0
+            displayName: Ensure remote updates directory exists
+            inputs:
+                sshEndpoint: $(sshServiceConnection)
+                runOptions: inline
+                inline: |
+                    set -euo pipefail
+                    mkdir -p "$(SERVER_UPDATE_DIR)"
+
+        - task: CopyFilesOverSSH@0
+            displayName: Upload package to /tmp
+            inputs:
+                sshEndpoint: $(sshServiceConnection)
+                sourceFolder: $(Build.ArtifactStagingDirectory)
+                contents: $(PACKAGE_NAME)
+                targetFolder: /tmp
+                cleanTargetFolder: false
+                overwrite: true
+                flattenFolders: true
+
+        - task: CopyFilesOverSSH@0
+            displayName: Upload update script to site root
+            inputs:
+                sshEndpoint: $(sshServiceConnection)
+                sourceFolder: $(WORK_DIR)
+                contents: $(updateScriptLocal)
+                targetFolder: $(SERVER_SCRIPT_DIR)
+                cleanTargetFolder: false
+                overwrite: true
+                flattenFolders: true
+
+        - task: SSH@0
+            displayName: Dry Run Update
+            inputs:
+                sshEndpoint: $(sshServiceConnection)
+                runOptions: inline
+                inline: |
+                    set -euo pipefail
+                    chmod +x "$(SERVER_SCRIPT_DIR)/$(remoteScriptName)"
+                    bash "$(SERVER_SCRIPT_DIR)/$(remoteScriptName)" "/tmp/$(PACKAGE_NAME)"
+
+        - task: SSH@0
+            displayName: Apply Update
+            condition: and(succeeded(), eq('${{ parameters.dryRunOnly }}', false))
+            inputs:
+                sshEndpoint: $(sshServiceConnection)
+                runOptions: inline
+                inline: |
+                    set -euo pipefail
+                    bash "$(SERVER_SCRIPT_DIR)/$(remoteScriptName)" "/tmp/$(PACKAGE_NAME)" --apply
