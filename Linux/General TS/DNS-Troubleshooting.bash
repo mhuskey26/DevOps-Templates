@@ -17,10 +17,10 @@ nmcli dev show | grep -i dns
 # 2) TEST BASIC NAME RESOLUTION
 # ---------------------------------------------------------------------------
 
-getent hosts google.com
-nslookup google.com
-dig google.com
-host google.com
+getent hosts google.com #uses system's configured name resolution, including /etc/nsswitch.conf
+nslookup google.com #older tool, less preferred for troubleshooting but still widely used and available
+dig google.com #better and preffered for trobleshooting dns issues
+host google.com #a lot like nslookup but more concise output
 
 
 # ---------------------------------------------------------------------------

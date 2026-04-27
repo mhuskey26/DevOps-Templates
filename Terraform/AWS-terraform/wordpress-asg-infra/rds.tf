@@ -77,7 +77,6 @@ resource "aws_db_instance" "wordpress" {
   deletion_protection             = var.environment == "prod" ? true : false
 
   # Enhanced Monitoring
-  enabled_cloudwatch_logs_exports = ["error", "general", "slowquery"]
   monitoring_interval             = var.rds_enable_enhanced_monitoring ? var.rds_monitoring_interval : 0
   monitoring_role_arn             = var.rds_enable_enhanced_monitoring ? aws_iam_role.rds_monitoring_role.arn : null
 

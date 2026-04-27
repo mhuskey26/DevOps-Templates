@@ -12,7 +12,7 @@
 # Example backend configuration (uncomment in main.tf):
 #
 # backend "s3" {
-#   bucket         = "wordpress-asg-terraform-state-YOUR_ACCOUNT_ID"
+#   bucket         = "wordpress-asg-terraform-state-256729431040"
 #   key            = "wordpress-asg/terraform.tfstate"
 #   region         = "us-west-1"
 #   encrypt        = true

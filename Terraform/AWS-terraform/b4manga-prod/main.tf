@@ -14,7 +14,7 @@ terraform {
 
   # Uncomment and configure after creating your S3 backend bucket
   # backend "s3" {
-  #   bucket         = "wordpress-asg-terraform-state-123456789012"
+  #   bucket         = "wordpress-asg-terraform-state-256729431040"
   #   key            = "wordpress-asg/terraform.tfstate"
   #   region         = "us-west-1"
   #   encrypt        = true

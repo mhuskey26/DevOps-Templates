@@ -1,0 +1,18 @@
+# Jenkins pipeline variables for aaPanel site deployments
+# Used by Jenkins/Jenkinsfile via the VARS_FILE parameter.
+
+git_repo_url: git@github.com:org/repo.git
+git_branch: main
+source_path: site
+update_script_local: aapanel-update-init.sh
+remote_script_name: aapanel-update-init.sh
+release_prefix: site
+version_file: wp-includes/version.php
+exclude_wp_uploads: true
+
+server_host: example.com
+server_site_root: /www/wwwroot/example.com
+
+# Jenkins credential IDs
+git_credentials_id: site-git-credentials
+ssh_credentials_id: aapanel-ssh-key

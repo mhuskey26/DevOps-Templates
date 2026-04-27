@@ -1,0 +1,22 @@
+variables:
+  vmImage: ubuntu-latest
+
+  # Optional external repository clone.
+  # Leave empty to use the repository where this pipeline YAML lives.
+  gitRepoUrl: ''
+  gitBranch: main
+
+  # Packaging inputs
+  sourcePath: site
+  updateScriptLocal: aapanel-update-init.sh
+  remoteScriptName: aapanel-update-init.sh
+  releasePrefix: site
+  versionFile: wp-includes/version.php
+  excludeWpUploads: 'true'
+
+  # aaPanel target
+  serverSiteRoot: /www/wwwroot/example.com
+
+  # Azure DevOps SSH service connection name
+  # Project Settings -> Service connections -> SSH
+  sshServiceConnection: aapanel-ssh-service-connection

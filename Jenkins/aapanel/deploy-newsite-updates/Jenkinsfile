@@ -1,0 +1,261 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        timeout(time: 40, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    parameters {
+        string(name: 'VARS_FILE', defaultValue: 'variables.yaml', description: 'Path to Jenkins variables YAML file')
+        string(name: 'VERSION_OVERRIDE', defaultValue: '', description: 'Optional explicit version; leave empty for auto-detect')
+        booleanParam(name: 'DRY_RUN_ONLY', defaultValue: true, description: 'Run dry-run only when true; apply update when false')
+    }
+
+    environment {
+        GIT_REPO_URL = ''
+        GIT_BRANCH = ''
+        SOURCE_PATH = ''
+        UPDATE_SCRIPT_LOCAL = ''
+        REMOTE_SCRIPT_NAME = ''
+        RELEASE_PREFIX = ''
+        VERSION_FILE = ''
+        SERVER_HOST = ''
+        SERVER_SITE_ROOT = ''
+        GIT_CREDENTIALS_ID = ''
+        SSH_CREDENTIALS_ID = ''
+        EXCLUDE_WP_UPLOADS = 'true'
+
+        APP_VERSION = ''
+        PACKAGE_NAME = ''
+        PACKAGE_PATH = ''
+        SERVER_UPDATE_DIR = ''
+        SERVER_SCRIPT_DIR = ''
+    }
+
+    stages {
+        stage('Load Variables') {
+            steps {
+                script {
+                    if (!fileExists(params.VARS_FILE)) {
+                        error("Variables file not found: ${params.VARS_FILE}")
+                    }
+
+                    def cfg = readYaml(file: params.VARS_FILE) ?: [:]
+                    def requiredKeys = [
+                        'git_repo_url', 'git_branch', 'source_path', 'update_script_local',
+                        'remote_script_name', 'release_prefix', 'version_file', 'server_host',
+                        'server_site_root', 'git_credentials_id', 'ssh_credentials_id'
+                    ]
+
+                    requiredKeys.each { k ->
+                        if (!cfg[k] || cfg[k].toString().trim().isEmpty()) {
+                            error("Missing required key in ${params.VARS_FILE}: ${k}")
+                        }
+                    }
+
+                    env.GIT_REPO_URL = cfg.git_repo_url.toString().trim()
+                    env.GIT_BRANCH = cfg.git_branch.toString().trim()
+                    env.SOURCE_PATH = cfg.source_path.toString().trim()
+                    env.UPDATE_SCRIPT_LOCAL = cfg.update_script_local.toString().trim()
+                    env.REMOTE_SCRIPT_NAME = cfg.remote_script_name.toString().trim()
+                    env.RELEASE_PREFIX = cfg.release_prefix.toString().trim()
+                    env.VERSION_FILE = cfg.version_file.toString().trim()
+                    env.SERVER_HOST = cfg.server_host.toString().trim()
+                    env.SERVER_SITE_ROOT = cfg.server_site_root.toString().trim()
+                    env.GIT_CREDENTIALS_ID = cfg.git_credentials_id.toString().trim()
+                    env.SSH_CREDENTIALS_ID = cfg.ssh_credentials_id.toString().trim()
+
+                    def excludeUploads = (cfg.exclude_wp_uploads == null) ? 'true' : cfg.exclude_wp_uploads.toString().trim().toLowerCase()
+                    env.EXCLUDE_WP_UPLOADS = (excludeUploads in ['true', '1', 'yes', 'y']) ? 'true' : 'false'
+
+                    env.SERVER_SCRIPT_DIR = env.SERVER_SITE_ROOT
+                    env.SERVER_UPDATE_DIR = "${env.SERVER_SITE_ROOT}/updates"
+                }
+            }
+        }
+
+        stage('Checkout') {
+            steps {
+                echo '=== [1/7] Checkout ==='
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "*/${env.GIT_BRANCH}"]],
+                    userRemoteConfigs: [[
+                        url: env.GIT_REPO_URL,
+                        credentialsId: env.GIT_CREDENTIALS_ID
+                    ]]
+                ])
+            }
+        }
+
+        stage('Validate Inputs') {
+            steps {
+                echo '=== [2/7] Validate pipeline inputs ==='
+                script {
+                    if (!fileExists(env.SOURCE_PATH)) {
+                        error("SOURCE_PATH not found: ${env.SOURCE_PATH}")
+                    }
+                    if (!fileExists(env.UPDATE_SCRIPT_LOCAL)) {
+                        error("UPDATE_SCRIPT_LOCAL not found: ${env.UPDATE_SCRIPT_LOCAL}")
+                    }
+                    echo "Remote script dir: ${env.SERVER_SCRIPT_DIR}"
+                    echo "Remote update dir: ${env.SERVER_UPDATE_DIR}"
+                }
+            }
+        }
+
+        stage('Resolve Version and Package Name') {
+            steps {
+                echo '=== [3/7] Resolve release version and package name ==='
+                script {
+                    def version = params.VERSION_OVERRIDE?.trim()
+                    if (!version && env.VERSION_FILE?.trim() && fileExists(env.VERSION_FILE)) {
+                        def text = readFile(env.VERSION_FILE)
+                        def wp = text =~ /\$wp_version\s*=\s*'([^']+)'/
+                        def app = text =~ /define\('APP_VERSION',\s*'([^']+)'\)/
+                        if (wp.find()) {
+                            version = wp.group(1)
+                        } else if (app.find()) {
+                            version = app.group(1)
+                        }
+                    }
+                    if (!version) {
+                        def shortSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                        version = "build-${env.BUILD_NUMBER}-${shortSha}"
+                    }
+                    version = version.replaceAll(/[^0-9A-Za-z._-]/, '-')
+                    env.APP_VERSION = version
+                    env.PACKAGE_NAME = "${env.RELEASE_PREFIX}-v${env.APP_VERSION}.zip"
+                    env.PACKAGE_PATH = "${env.WORKSPACE}/${env.PACKAGE_NAME}"
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.RELEASE_PREFIX} v${env.APP_VERSION}"
+                    echo "Release version: ${env.APP_VERSION}"
+                    echo "Package name: ${env.PACKAGE_NAME}"
+                }
+            }
+        }
+
+        stage('Package Site') {
+            steps {
+                echo '=== [4/7] Build site package ==='
+                sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+STAGING="$(mktemp -d)"
+trap 'rm -rf "$STAGING"' EXIT
+
+cp -r "$SOURCE_PATH" "$STAGING/site"
+
+EXCLUDE_NAMES=(
+  ".git" ".github" ".vscode" "node_modules" "tests" "test"
+  "__pycache__" ".DS_Store" "Thumbs.db" ".env" ".env.*"
+)
+for NAME in "${EXCLUDE_NAMES[@]}"; do
+  find "$STAGING/site" -name "$NAME" -exec rm -rf {} + 2>/dev/null || true
+done
+
+find "$STAGING/site" -name "*.pyc" -exec rm -f {} + 2>/dev/null || true
+mkdir -p "$STAGING/site/wp-content/uploads"
+mkdir -p "$STAGING/site/wp-content/cache"
+mkdir -p "$STAGING/site/wp-content/upgrade"
+
+find "$STAGING/site" -type f \
+  \( -name "*.tmp" -o -name "*.log" -o -name "*.cache" \) \
+  -delete 2>/dev/null || true
+
+if [ "${EXCLUDE_WP_UPLOADS}" = "true" ]; then
+  rm -rf "$STAGING/site/wp-content/uploads" || true
+fi
+
+cd "$STAGING"
+zip -r "$PACKAGE_PATH" site -x "*.DS_Store"
+ls -lh "$PACKAGE_PATH"
+'''
+            }
+        }
+
+        stage('Transfer to Server') {
+            steps {
+                echo '=== [5/7] Transfer package and script ==='
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: env.SSH_CREDENTIALS_ID,
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )
+                ]) {
+                    sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o BatchMode=yes"
+
+ssh $SSH_OPTS ${SSH_USER}@${SERVER_HOST} "mkdir -p ${SERVER_UPDATE_DIR}"
+scp $SSH_OPTS "$PACKAGE_PATH" ${SSH_USER}@${SERVER_HOST}:/tmp/${PACKAGE_NAME}
+scp $SSH_OPTS "$UPDATE_SCRIPT_LOCAL" ${SSH_USER}@${SERVER_HOST}:${SERVER_SCRIPT_DIR}/${REMOTE_SCRIPT_NAME}
+ssh $SSH_OPTS ${SSH_USER}@${SERVER_HOST} "chmod +x ${SERVER_SCRIPT_DIR}/${REMOTE_SCRIPT_NAME}"
+'''
+                }
+            }
+        }
+
+        stage('Dry Run') {
+            steps {
+                echo '=== [6/7] Dry-run update on server ==='
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: env.SSH_CREDENTIALS_ID,
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )
+                ]) {
+                    sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o BatchMode=yes"
+ssh $SSH_OPTS ${SSH_USER}@${SERVER_HOST} \
+  "bash ${SERVER_SCRIPT_DIR}/${REMOTE_SCRIPT_NAME} /tmp/${PACKAGE_NAME}"
+'''
+                }
+            }
+        }
+
+        stage('Apply Update') {
+            when {
+                expression { !params.DRY_RUN_ONLY }
+            }
+            steps {
+                echo '=== [7/7] Apply update on server ==='
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: env.SSH_CREDENTIALS_ID,
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )
+                ]) {
+                    sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o BatchMode=yes"
+ssh $SSH_OPTS ${SSH_USER}@${SERVER_HOST} \
+  "bash ${SERVER_SCRIPT_DIR}/${REMOTE_SCRIPT_NAME} /tmp/${PACKAGE_NAME} --apply"
+'''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo 'Pipeline finished'
+            sh 'rm -f "$PACKAGE_PATH" || true'
+        }
+        success {
+            echo 'SUCCESS - Deployment finished'
+        }
+        failure {
+            echo 'FAILURE - Check stage output for details'
+        }
+    }
+}
