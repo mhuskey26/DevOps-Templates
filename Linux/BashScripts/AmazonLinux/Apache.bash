@@ -1,18 +1,23 @@
 #!/bin/bash
 
-# Install and configure Apache (httpd) with PHP-FPM on RHEL / Rocky / AlmaLinux 9.
-# Suitable for hosting a WordPress site with an external MySQL/MariaDB database.
+# Install and configure Apache (httpd) with PHP-FPM on Amazon Linux 2023.
+# Intended for a WordPress site backed by EFS and an external RDS/Aurora database.
 # Update the variables below before running.
 
 set -euo pipefail
 
+exec > >(tee /var/log/apache-bootstrap.log | logger -t apache-bootstrap -s 2>/dev/console) 2>&1
+
 # ── Configuration ─────────────────────────────────────────────────────────────
+EFS_DNS_NAME="fs-xxxxxxxx.efs.us-east-1.amazonaws.com"
 SITE_DOMAIN="example.com"
 WEB_ROOT="/var/www/html"
+EFS_MOUNT_POINT="/mnt/efs"
+SHARED_WP_CONTENT="$EFS_MOUNT_POINT/wp-content"
 WP_DB_NAME="wordpress"
 WP_DB_USER="wp_user"
 WP_DB_PASSWORD="change-me"
-WP_DB_HOST="localhost"
+WP_DB_HOST="wordpress.cluster-xxxxxxxx.us-east-1.rds.amazonaws.com"
 # ──────────────────────────────────────────────────────────────────────────────
 
 if [ "${EUID}" -ne 0 ]; then
@@ -20,20 +25,13 @@ if [ "${EUID}" -ne 0 ]; then
   exit 1
 fi
 
-if [ "$WP_DB_PASSWORD" = "change-me" ]; then
-  echo "Update WP_DB_PASSWORD and other variables before running."
+if [ "$EFS_DNS_NAME" = "fs-xxxxxxxx.efs.us-east-1.amazonaws.com" ]; then
+  echo "Update EFS_DNS_NAME before running this script."
   exit 1
 fi
 
 echo "==> Updating packages..."
 dnf update -y
-
-# ── Enable EPEL and Remi repos (needed for PHP 8.2 on RHEL 9) ─────────────────
-echo "==> Enabling EPEL and Remi repositories..."
-dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
-dnf install -y https://rpms.remirepo.net/enterprise/remi-release-9.rpm
-dnf module reset php -y
-dnf module enable php:remi-8.2 -y
 
 echo "==> Installing Apache, PHP 8.2, and utilities..."
 dnf install -y \
@@ -42,23 +40,35 @@ dnf install -y \
   curl \
   tar \
   unzip \
-  php \
-  php-cli \
-  php-common \
-  php-curl \
-  php-fpm \
-  php-gd \
-  php-intl \
-  php-mbstring \
-  php-mysqlnd \
-  php-opcache \
-  php-soap \
-  php-xml \
-  php-zip \
-  mysql
+  amazon-efs-utils \
+  nfs-utils \
+  php8.2 \
+  php8.2-cli \
+  php8.2-common \
+  php8.2-curl \
+  php8.2-fpm \
+  php8.2-gd \
+  php8.2-intl \
+  php8.2-mbstring \
+  php8.2-mysqlnd \
+  php8.2-opcache \
+  php8.2-soap \
+  php8.2-xml \
+  php8.2-zip \
+  mariadb105
+
+# ── Mount EFS ─────────────────────────────────────────────────────────────────
+echo "==> Mounting EFS..."
+mkdir -p "$WEB_ROOT" "$EFS_MOUNT_POINT"
+
+if ! grep -q "$EFS_DNS_NAME:/ $EFS_MOUNT_POINT efs" /etc/fstab; then
+  echo "$EFS_DNS_NAME:/ $EFS_MOUNT_POINT efs _netdev,tls 0 0" >> /etc/fstab
+fi
+
+mount -a
+mkdir -p "$SHARED_WP_CONTENT/uploads" "$SHARED_WP_CONTENT/plugins" "$SHARED_WP_CONTENT/themes"
 
 # ── Download WordPress ────────────────────────────────────────────────────────
-mkdir -p "$WEB_ROOT"
 if [ ! -f "$WEB_ROOT/wp-load.php" ]; then
   echo "==> Downloading WordPress..."
   curl -fsSL https://wordpress.org/latest.tar.gz -o /tmp/wordpress.tar.gz
@@ -67,34 +77,43 @@ if [ ! -f "$WEB_ROOT/wp-load.php" ]; then
   rm -rf /tmp/wordpress /tmp/wordpress.tar.gz
 fi
 
+# ── Link shared wp-content from EFS ───────────────────────────────────────────
+if [ -d "$WEB_ROOT/wp-content" ] && [ ! -L "$WEB_ROOT/wp-content" ]; then
+  if [ -z "$(ls -A "$SHARED_WP_CONTENT")" ]; then
+    cp -a "$WEB_ROOT/wp-content"/. "$SHARED_WP_CONTENT"/
+  fi
+  rm -rf "$WEB_ROOT/wp-content"
+fi
+[ -L "$WEB_ROOT/wp-content" ] || ln -s "$SHARED_WP_CONTENT" "$WEB_ROOT/wp-content"
+
 # ── Apache vhost config ────────────────────────────────────────────────────────
 echo "==> Writing Apache vhost config..."
-cat > /etc/httpd/conf.d/wordpress.conf <<EOF
+cat > /etc/httpd/conf.d/wordpress.conf <<'EOF'
 <VirtualHost *:80>
-    ServerName ${SITE_DOMAIN}
-    DocumentRoot ${WEB_ROOT}
+    ServerName _default_
+    DocumentRoot /var/www/html
 
-    <Directory ${WEB_ROOT}>
+    <Directory /var/www/html>
         AllowOverride All
         Require all granted
     </Directory>
 
-    <FilesMatch \.php\$>
+    <FilesMatch \.php$>
         SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
     </FilesMatch>
 
     DirectoryIndex index.php index.html
-    ErrorLog  /var/log/httpd/${SITE_DOMAIN}-error.log
-    CustomLog /var/log/httpd/${SITE_DOMAIN}-access.log combined
+    ErrorLog  /var/log/httpd/wordpress-error.log
+    CustomLog /var/log/httpd/wordpress-access.log combined
 </VirtualHost>
 EOF
 
-# ── PHP-FPM: Unix socket and apache user ─────────────────────────────────────
-sed -i 's|^listen = .*|listen = /run/php-fpm/www.sock|'      /etc/php-fpm.d/www.conf
-sed -i 's|^;listen.owner = .*|listen.owner = apache|'        /etc/php-fpm.d/www.conf
-sed -i 's|^;listen.group = .*|listen.group = apache|'        /etc/php-fpm.d/www.conf
-sed -i 's|^user = apache|user = apache|'                      /etc/php-fpm.d/www.conf
-sed -i 's|^group = apache|group = apache|'                    /etc/php-fpm.d/www.conf
+# ── PHP-FPM: use Unix socket and run as apache ────────────────────────────────
+sed -i 's|^listen = .*|listen = /run/php-fpm/www.sock|'       /etc/php-fpm.d/www.conf
+sed -i 's|^;listen.owner = .*|listen.owner = apache|'         /etc/php-fpm.d/www.conf
+sed -i 's|^;listen.group = .*|listen.group = apache|'         /etc/php-fpm.d/www.conf
+sed -i 's|^user = apache|user = apache|'                       /etc/php-fpm.d/www.conf
+sed -i 's|^group = apache|group = apache|'                     /etc/php-fpm.d/www.conf
 
 # ── wp-config.php ─────────────────────────────────────────────────────────────
 if [ ! -f "$WEB_ROOT/wp-config.php" ]; then
@@ -121,18 +140,11 @@ require_once ABSPATH . 'wp-settings.php';
 EOF
 fi
 
-# ── Permissions and SELinux ───────────────────────────────────────────────────
+# ── Permissions ───────────────────────────────────────────────────────────────
 chown -R apache:apache "$WEB_ROOT"
 find "$WEB_ROOT" -type d -exec chmod 755 {} +
 find "$WEB_ROOT" -type f -exec chmod 644 {} +
 chmod 640 "$WEB_ROOT/wp-config.php"
-
-# Allow Apache to write to uploads and connect to DB over the network
-if command -v setsebool &>/dev/null; then
-  setsebool -P httpd_can_network_connect_db 1
-  setsebool -P httpd_can_network_connect 1
-  chcon -R -t httpd_sys_rw_content_t "$WEB_ROOT/wp-content/uploads" 2>/dev/null || true
-fi
 
 # ── firewalld ─────────────────────────────────────────────────────────────────
 echo "==> Opening firewall ports..."
@@ -147,4 +159,4 @@ echo "==> Enabling services..."
 systemctl enable --now php-fpm
 systemctl enable --now httpd
 
-echo "==> Apache + WordPress setup complete for ${SITE_DOMAIN}."
+echo "==> Apache + WordPress bootstrap complete."

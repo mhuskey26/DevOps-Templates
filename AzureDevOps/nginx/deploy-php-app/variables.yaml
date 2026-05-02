@@ -1,0 +1,35 @@
+variables:
+  vmImage: ubuntu-latest
+
+  # Azure DevOps SSH service connection
+  # Project Settings -> Service connections -> SSH
+  sshServiceConnection: nginx-ssh-service-connection
+
+  # Optional external repository. Leave empty to use pipeline repo.
+  gitRepoUrl: ''
+  gitBranch: main
+
+  # Path inside repo containing the PHP application files
+  sourcePath: app
+
+  # Remote deployment path
+  serverAppRoot: /var/www/html/my-php-app
+  serverNginxSitesAvailable: /etc/nginx/sites-available
+  serverNginxSitesEnabled: /etc/nginx/sites-enabled
+
+  # Site/app identity
+  siteDomain: my-php-app.example.com
+  releasePrefix: php-app
+
+  # PHP-FPM socket or TCP address
+  phpFpmSocket: unix:/run/php/php8.3-fpm.sock
+
+  # Composer: set to 'true' to run 'composer install --no-dev' before packaging
+  runComposer: 'true'
+
+  # .env file: path to a secure .env stored as a pipeline secret file (Library -> Secure Files)
+  # Leave empty to skip uploading an .env file
+  envSecureFileName: my-php-app.env
+
+  # Path on server where the .env should be placed (usually outside web root)
+  serverEnvPath: /etc/my-php-app/.env

@@ -1,0 +1,150 @@
+trigger: none
+pr: none
+
+variables:
+- template: variables.yaml
+
+parameters:
+- name: versionOverride
+  type: string
+  default: ''
+- name: dryRunOnly
+  type: boolean
+  default: true
+
+pool:
+  vmImage: $(vmImage)
+
+stages:
+
+- stage: Deploy
+  displayName: Deploy Nginx Website
+  jobs:
+  - job: DeployNginxSite
+    timeoutInMinutes: 30
+    steps:
+    - checkout: self
+      clean: true
+
+    - bash: |
+        set -euo pipefail
+
+        WORK_DIR="$(Build.SourcesDirectory)"
+        if [ -n "$(gitRepoUrl)" ]; then
+          echo "Cloning external repo: $(gitRepoUrl) @ $(gitBranch)"
+          git clone --depth 1 --branch "$(gitBranch)" "$(gitRepoUrl)" "$(Build.SourcesDirectory)/repo-src"
+          WORK_DIR="$(Build.SourcesDirectory)/repo-src"
+        else
+          echo "Using self repository checkout"
+        fi
+
+        echo "##vso[task.setvariable variable=WORK_DIR]$WORK_DIR"
+      displayName: Resolve Source
+
+    - bash: |
+        set -euo pipefail
+        test -d "$(WORK_DIR)/$(sourcePath)" || { echo "Source path not found: $(WORK_DIR)/$(sourcePath)"; exit 1; }
+      displayName: Validate Inputs
+
+    - bash: |
+        set -euo pipefail
+
+        VERSION="${{ parameters.versionOverride }}"
+        if [ -z "$VERSION" ]; then
+          SHORT_SHA="$(echo '$(Build.SourceVersion)' | cut -c1-8)"
+          VERSION="build-$(Build.BuildId)-${SHORT_SHA}"
+        fi
+        SAFE_VERSION="$(echo "$VERSION" | tr -c '0-9A-Za-z._-' '-')"
+        PACKAGE_NAME="$(releasePrefix)-v${SAFE_VERSION}.tar.gz"
+        PACKAGE_PATH="$(Build.ArtifactStagingDirectory)/${PACKAGE_NAME}"
+
+        echo "##vso[task.setvariable variable=PACKAGE_NAME]$PACKAGE_NAME"
+        echo "##vso[task.setvariable variable=PACKAGE_PATH]$PACKAGE_PATH"
+        echo "##vso[task.setvariable variable=APP_VERSION]$SAFE_VERSION"
+      displayName: Resolve Version
+
+    - bash: |
+        set -euo pipefail
+
+        STAGING="$(mktemp -d)"
+        trap 'rm -rf "$STAGING"' EXIT
+
+        cp -r "$(WORK_DIR)/$(sourcePath)" "$STAGING/site"
+
+        # Strip dev artifacts
+        for NAME in .git .github .vscode node_modules .DS_Store Thumbs.db .env; do
+          find "$STAGING/site" -name "$NAME" -exec rm -rf {} + 2>/dev/null || true
+        done
+
+        tar -czf "$(PACKAGE_PATH)" -C "$STAGING" site
+        echo "Package: $(PACKAGE_PATH)"
+      displayName: Package Site
+
+    - task: CopyFilesOverSSH@0
+      displayName: Upload Package to Server
+      condition: eq('${{ parameters.dryRunOnly }}', 'false')
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        sourceFolder: $(Build.ArtifactStagingDirectory)
+        contents: $(PACKAGE_NAME)
+        targetFolder: /tmp
+
+    - task: SSH@0
+      displayName: Deploy Site Files
+      condition: eq('${{ parameters.dryRunOnly }}', 'false')
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+
+          PACKAGE_NAME="$(PACKAGE_NAME)"
+          WEB_ROOT="$(serverWebRoot)"
+          BACKUP_DIR="${WEB_ROOT}.backup-$(date +%Y%m%d%H%M%S)"
+
+          # Backup existing site
+          if [ -d "$WEB_ROOT" ]; then
+            cp -a "$WEB_ROOT" "$BACKUP_DIR"
+            echo "Backup created: $BACKUP_DIR"
+          fi
+
+          mkdir -p "$WEB_ROOT"
+
+          # Extract new files
+          STAGING="$(mktemp -d)"
+          trap 'rm -rf "$STAGING"' EXIT
+          tar -xzf "/tmp/${PACKAGE_NAME}" -C "$STAGING"
+          rsync -a --delete "$STAGING/site/" "$WEB_ROOT/"
+
+          # Set permissions
+          chown -R www-data:www-data "$WEB_ROOT"
+          find "$WEB_ROOT" -type d -exec chmod 755 {} +
+          find "$WEB_ROOT" -type f -exec chmod 644 {} +
+
+          rm -f "/tmp/${PACKAGE_NAME}"
+          echo "Deployment complete: $WEB_ROOT"
+
+    - task: SSH@0
+      displayName: Upload and Enable Nginx Vhost Config
+      condition: and(eq('${{ parameters.dryRunOnly }}', 'false'), ne('$(nginxVhostConfigLocal)', ''))
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+
+          CONF_SRC="/tmp/$(siteDomain).conf"
+          CONF_DEST="$(serverNginxSitesAvailable)/$(siteDomain).conf"
+          LINK_DEST="$(serverNginxSitesEnabled)/$(siteDomain).conf"
+
+          cp "$CONF_SRC" "$CONF_DEST"
+          ln -sf "$CONF_DEST" "$LINK_DEST"
+
+          nginx -t
+          systemctl reload nginx
+          echo "Nginx vhost enabled and reloaded."
+
+    - bash: |
+        echo "[DRY RUN] Would deploy $(PACKAGE_NAME) to $(serverWebRoot) on remote server."
+      displayName: Dry Run Summary
+      condition: eq('${{ parameters.dryRunOnly }}', 'true')

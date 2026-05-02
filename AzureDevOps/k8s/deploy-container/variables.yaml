@@ -1,0 +1,24 @@
+variables:
+  vmImage: ubuntu-latest
+
+  # Container registry service connection
+  # Project Settings -> Service connections -> Docker Registry
+  containerRegistryConnection: my-acr-service-connection
+  containerRegistry: myregistry.azurecr.io
+  imageRepository: my-app
+  imageTag: $(Build.BuildId)
+
+  # Kubernetes service connection
+  # Project Settings -> Service connections -> Kubernetes
+  k8sServiceConnection: my-k8s-service-connection
+  k8sNamespace: default
+
+  # Deployment manifest paths (relative to repo root)
+  manifestsPath: k8s/manifests
+
+  # If using a Helm chart instead of raw manifests, set helmChart to the chart path/name
+  # and set useHelm to 'true'
+  useHelm: 'false'
+  helmChart: charts/my-app
+  helmReleaseName: my-app
+  helmValuesFile: charts/my-app/values.yaml

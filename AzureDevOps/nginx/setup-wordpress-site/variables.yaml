@@ -1,0 +1,30 @@
+variables:
+  vmImage: ubuntu-latest
+
+  # Azure DevOps SSH service connection
+  # Project Settings -> Service connections -> SSH
+  sshServiceConnection: nginx-ssh-service-connection
+
+  # Site identity
+  siteDomain: example.com
+  serverWebRoot: /var/www/html/example.com
+
+  # Nginx config paths on server
+  serverNginxSitesAvailable: /etc/nginx/sites-available
+  serverNginxSitesEnabled: /etc/nginx/sites-enabled
+
+  # PHP-FPM socket or TCP address (e.g. unix:/run/php/php8.3-fpm.sock)
+  phpFpmSocket: unix:/run/php/php8.3-fpm.sock
+
+  # MySQL / MariaDB credentials for the new WordPress database
+  # Store secrets in a variable group linked to Azure Key Vault, not here.
+  dbHost: localhost
+  dbName: wp_example
+  dbUser: wp_example_user
+  # dbPassword -> set as a secret in a variable group
+
+  # WordPress version to download (use 'latest' or a specific version e.g. '6.5.3')
+  wpVersion: latest
+
+  # Whether to install WP-CLI on the server (set false if already present)
+  installWpCli: 'true'

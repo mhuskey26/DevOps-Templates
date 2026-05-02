@@ -1,0 +1,26 @@
+variables:
+  vmImage: ubuntu-latest
+
+  # Azure DevOps SSH service connection name
+  # Project Settings -> Service connections -> SSH
+  sshServiceConnection: nginx-ssh-service-connection
+
+  # Optional external repository. Leave empty to use pipeline repo.
+  gitRepoUrl: ''
+  gitBranch: main
+
+  # Path inside the repo that contains the website files
+  sourcePath: public
+
+  # Remote server paths
+  serverWebRoot: /var/www/html/example.com
+  serverNginxSitesAvailable: /etc/nginx/sites-available
+  serverNginxSitesEnabled: /etc/nginx/sites-enabled
+
+  # Site identity
+  siteDomain: example.com
+  releasePrefix: site
+
+  # Local path to the nginx vhost config file in the repo (optional)
+  # Leave empty to skip uploading a vhost config
+  nginxVhostConfigLocal: nginx/example.com.conf

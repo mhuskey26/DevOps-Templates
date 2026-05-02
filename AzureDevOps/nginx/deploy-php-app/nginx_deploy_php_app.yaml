@@ -1,0 +1,259 @@
+trigger: none
+pr: none
+
+variables:
+- template: variables.yaml
+
+parameters:
+- name: versionOverride
+  type: string
+  default: ''
+- name: dryRunOnly
+  type: boolean
+  default: true
+
+pool:
+  vmImage: $(vmImage)
+
+stages:
+
+- stage: Deploy
+  displayName: Deploy PHP Application
+  jobs:
+  - job: DeployPhpApp
+    timeoutInMinutes: 30
+    steps:
+    - checkout: self
+      clean: true
+
+    # ── Resolve source ─────────────────────────────────────────────────────────
+    - bash: |
+        set -euo pipefail
+
+        WORK_DIR="$(Build.SourcesDirectory)"
+        if [ -n "$(gitRepoUrl)" ]; then
+          echo "Cloning external repo: $(gitRepoUrl) @ $(gitBranch)"
+          git clone --depth 1 --branch "$(gitBranch)" "$(gitRepoUrl)" "$(Build.SourcesDirectory)/repo-src"
+          WORK_DIR="$(Build.SourcesDirectory)/repo-src"
+        else
+          echo "Using self repository checkout"
+        fi
+
+        echo "##vso[task.setvariable variable=WORK_DIR]$WORK_DIR"
+      displayName: Resolve Source
+
+    - bash: |
+        set -euo pipefail
+        test -d "$(WORK_DIR)/$(sourcePath)" || { echo "Source path not found: $(WORK_DIR)/$(sourcePath)"; exit 1; }
+      displayName: Validate Source Path
+
+    # ── Resolve version ────────────────────────────────────────────────────────
+    - bash: |
+        set -euo pipefail
+
+        VERSION="${{ parameters.versionOverride }}"
+        if [ -z "$VERSION" ]; then
+          SHORT_SHA="$(echo '$(Build.SourceVersion)' | cut -c1-8)"
+          VERSION="build-$(Build.BuildId)-${SHORT_SHA}"
+        fi
+        SAFE_VERSION="$(echo "$VERSION" | tr -c '0-9A-Za-z._-' '-')"
+        PACKAGE_NAME="$(releasePrefix)-v${SAFE_VERSION}.tar.gz"
+        PACKAGE_PATH="$(Build.ArtifactStagingDirectory)/${PACKAGE_NAME}"
+
+        echo "##vso[task.setvariable variable=APP_VERSION]$SAFE_VERSION"
+        echo "##vso[task.setvariable variable=PACKAGE_NAME]$PACKAGE_NAME"
+        echo "##vso[task.setvariable variable=PACKAGE_PATH]$PACKAGE_PATH"
+        echo "Version: $SAFE_VERSION"
+      displayName: Resolve Version
+
+    # ── Composer install ───────────────────────────────────────────────────────
+    - bash: |
+        set -euo pipefail
+
+        APP_DIR="$(WORK_DIR)/$(sourcePath)"
+
+        if [ ! -f "$APP_DIR/composer.json" ]; then
+          echo "No composer.json found, skipping Composer."
+          exit 0
+        fi
+
+        if ! command -v composer &>/dev/null; then
+          curl -sS https://getcomposer.org/installer | php
+          mv composer.phar /usr/local/bin/composer
+        fi
+
+        composer install \
+          --working-dir="$APP_DIR" \
+          --no-dev \
+          --no-interaction \
+          --optimize-autoloader \
+          --prefer-dist
+      displayName: Composer Install (no-dev)
+      condition: eq('$(runComposer)', 'true')
+
+    # ── Package application ────────────────────────────────────────────────────
+    - bash: |
+        set -euo pipefail
+
+        STAGING="$(mktemp -d)"
+        trap 'rm -rf "$STAGING"' EXIT
+
+        cp -r "$(WORK_DIR)/$(sourcePath)" "$STAGING/app"
+
+        # Strip dev/non-deployable artifacts
+        for NAME in .git .github .vscode node_modules .DS_Store Thumbs.db .env tests test; do
+          find "$STAGING/app" -name "$NAME" -exec rm -rf {} + 2>/dev/null || true
+        done
+        find "$STAGING/app" -name "*.map" -exec rm -f {} + 2>/dev/null || true
+
+        tar -czf "$(PACKAGE_PATH)" -C "$STAGING" app
+        echo "Package ready: $(PACKAGE_PATH)"
+      displayName: Package Application
+
+    # ── Upload .env secure file ────────────────────────────────────────────────
+    - task: DownloadSecureFile@1
+      displayName: Download .env Secure File
+      condition: and(eq('${{ parameters.dryRunOnly }}', 'false'), ne('$(envSecureFileName)', ''))
+      name: envFile
+      inputs:
+        secureFile: $(envSecureFileName)
+
+    - task: CopyFilesOverSSH@0
+      displayName: Upload Application Package
+      condition: eq('${{ parameters.dryRunOnly }}', 'false')
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        sourceFolder: $(Build.ArtifactStagingDirectory)
+        contents: $(PACKAGE_NAME)
+        targetFolder: /tmp
+
+    # ── Deploy on server ───────────────────────────────────────────────────────
+    - task: SSH@0
+      displayName: Deploy Application Files
+      condition: eq('${{ parameters.dryRunOnly }}', 'false')
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+
+          PACKAGE_NAME="$(PACKAGE_NAME)"
+          APP_ROOT="$(serverAppRoot)"
+          BACKUP_DIR="${APP_ROOT}.backup-$(date +%Y%m%d%H%M%S)"
+
+          # Backup current deployment
+          if [ -d "$APP_ROOT" ]; then
+            cp -a "$APP_ROOT" "$BACKUP_DIR"
+            echo "Backup: $BACKUP_DIR"
+          fi
+
+          mkdir -p "$APP_ROOT"
+
+          STAGING="$(mktemp -d)"
+          trap 'rm -rf "$STAGING"' EXIT
+          tar -xzf "/tmp/${PACKAGE_NAME}" -C "$STAGING"
+          rsync -a --delete "$STAGING/app/" "$APP_ROOT/"
+
+          # Restore writable directories (uploads, cache, storage etc.)
+          for WRITABLE_DIR in uploads storage/logs storage/cache public/uploads; do
+            if [ -d "$BACKUP_DIR/$WRITABLE_DIR" ] && [ ! -d "$APP_ROOT/$WRITABLE_DIR" ]; then
+              cp -a "$BACKUP_DIR/$WRITABLE_DIR" "$APP_ROOT/$WRITABLE_DIR"
+            fi
+            mkdir -p "$APP_ROOT/$WRITABLE_DIR"
+          done
+
+          chown -R www-data:www-data "$APP_ROOT"
+          find "$APP_ROOT" -type d -exec chmod 755 {} +
+          find "$APP_ROOT" -type f -exec chmod 644 {} +
+
+          rm -f "/tmp/${PACKAGE_NAME}"
+          echo "Deployment complete: $APP_ROOT"
+
+    # ── Place .env on server ───────────────────────────────────────────────────
+    - task: SSH@0
+      displayName: Install .env File on Server
+      condition: and(eq('${{ parameters.dryRunOnly }}', 'false'), ne('$(envSecureFileName)', ''))
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$(serverEnvPath)")"
+          # File is uploaded separately via secure copy; this step just sets permissions
+          chmod 640 "$(serverEnvPath)"
+          chown root:www-data "$(serverEnvPath)"
+          echo ".env permissions set."
+
+    # ── Nginx vhost ────────────────────────────────────────────────────────────
+    - task: SSH@0
+      displayName: Configure Nginx Vhost for PHP App
+      condition: eq('${{ parameters.dryRunOnly }}', 'false')
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+
+          CONF="$(serverNginxSitesAvailable)/$(siteDomain).conf"
+
+          if [ -f "$CONF" ]; then
+            echo "Nginx vhost already exists, skipping creation."
+            exit 0
+          fi
+
+          cat > "$CONF" <<'NGINX'
+          server {
+              listen 80;
+              listen [::]:80;
+
+              server_name $(siteDomain) www.$(siteDomain);
+              root $(serverAppRoot)/public;
+              index index.php index.html;
+
+              access_log /var/log/nginx/$(siteDomain).access.log;
+              error_log  /var/log/nginx/$(siteDomain).error.log;
+
+              # Security headers
+              add_header X-Frame-Options "SAMEORIGIN";
+              add_header X-Content-Type-Options "nosniff";
+              add_header X-XSS-Protection "1; mode=block";
+
+              # Route all requests through index.php (Laravel/Slim/Symfony style)
+              location / {
+                  try_files $uri $uri/ /index.php?$query_string;
+              }
+
+              # PHP-FPM handler
+              location ~ \.php$ {
+                  include snippets/fastcgi-php.conf;
+                  fastcgi_pass $(phpFpmSocket);
+                  fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+                  include fastcgi_params;
+              }
+
+              # Deny hidden files and env
+              location ~ /\.              { deny all; }
+              location = /.env            { deny all; }
+
+              # Static asset caching
+              location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+                  expires 30d;
+                  log_not_found off;
+              }
+
+              client_max_body_size 32M;
+          }
+          NGINX
+
+          ln -sf "$CONF" "$(serverNginxSitesEnabled)/$(siteDomain).conf"
+          nginx -t
+          systemctl reload nginx
+          echo "Nginx vhost enabled for $(siteDomain)."
+
+    # ── Dry run summary ────────────────────────────────────────────────────────
+    - bash: |
+        echo "[DRY RUN] Would deploy $(PACKAGE_NAME) to $(serverAppRoot)"
+        echo "[DRY RUN] Domain: $(siteDomain)"
+        echo "[DRY RUN] PHP-FPM: $(phpFpmSocket)"
+      displayName: Dry Run Summary
+      condition: eq('${{ parameters.dryRunOnly }}', 'true')

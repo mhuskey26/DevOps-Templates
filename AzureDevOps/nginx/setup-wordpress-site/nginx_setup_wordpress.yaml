@@ -1,0 +1,205 @@
+trigger: none
+pr: none
+
+variables:
+- template: variables.yaml
+
+parameters:
+- name: dryRunOnly
+  type: boolean
+  default: true
+- name: wpVersion
+  type: string
+  default: ''
+
+pool:
+  vmImage: $(vmImage)
+
+stages:
+
+- stage: SetupWordPress
+  displayName: Setup Nginx + WordPress Site
+  jobs:
+  - job: ProvisionSite
+    timeoutInMinutes: 30
+    steps:
+    - checkout: self
+      clean: true
+
+    - bash: |
+        set -euo pipefail
+        WP_VER="${{ parameters.wpVersion }}"
+        [ -z "$WP_VER" ] && WP_VER="$(wpVersion)"
+        echo "##vso[task.setvariable variable=WP_VERSION]$WP_VER"
+        echo "WordPress version: $WP_VER"
+        echo "Site domain:       $(siteDomain)"
+        echo "Web root:          $(serverWebRoot)"
+      displayName: Resolve Parameters
+
+    # ── Step 1: Install server dependencies ────────────────────────────────────
+    - task: SSH@0
+      displayName: Install Nginx, PHP, MySQL Client
+      condition: eq('${{ parameters.dryRunOnly }}', 'false')
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          apt-get update -y
+          apt-get install -y nginx mysql-client curl unzip
+
+          # Install PHP and required WordPress extensions
+          apt-get install -y \
+            php-fpm php-mysql php-xml php-mbstring php-curl \
+            php-gd php-zip php-intl php-soap php-bcmath php-imagick
+
+          systemctl enable nginx
+          systemctl start nginx
+
+    # ── Step 2: Install WP-CLI ─────────────────────────────────────────────────
+    - task: SSH@0
+      displayName: Install WP-CLI
+      condition: and(eq('${{ parameters.dryRunOnly }}', 'false'), eq('$(installWpCli)', 'true'))
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+          if ! command -v wp &>/dev/null; then
+            curl -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+            chmod +x wp-cli.phar
+            mv wp-cli.phar /usr/local/bin/wp
+          fi
+          wp --info
+
+    # ── Step 3: Create database ────────────────────────────────────────────────
+    - task: SSH@0
+      displayName: Create WordPress Database and User
+      condition: eq('${{ parameters.dryRunOnly }}', 'false')
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+
+          mysql -h "$(dbHost)" -u root -p"${MYSQL_ROOT_PASSWORD}" <<SQL
+          CREATE DATABASE IF NOT EXISTS \`$(dbName)\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+          CREATE USER IF NOT EXISTS '$(dbUser)'@'$(dbHost)' IDENTIFIED BY '${DB_PASSWORD}';
+          GRANT ALL PRIVILEGES ON \`$(dbName)\`.* TO '$(dbUser)'@'$(dbHost)';
+          FLUSH PRIVILEGES;
+          SQL
+          echo "Database $(dbName) ready."
+      env:
+        DB_PASSWORD: $(dbPassword)
+        MYSQL_ROOT_PASSWORD: $(mysqlRootPassword)
+
+    # ── Step 4: Download and configure WordPress ───────────────────────────────
+    - task: SSH@0
+      displayName: Download and Configure WordPress
+      condition: eq('${{ parameters.dryRunOnly }}', 'false')
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+
+          WEB_ROOT="$(serverWebRoot)"
+          mkdir -p "$WEB_ROOT"
+
+          if [ ! -f "$WEB_ROOT/wp-login.php" ]; then
+            WP_VER="$(WP_VERSION)"
+            if [ "$WP_VER" = "latest" ]; then
+              wp core download --path="$WEB_ROOT" --allow-root
+            else
+              wp core download --path="$WEB_ROOT" --version="$WP_VER" --allow-root
+            fi
+          else
+            echo "WordPress already present, skipping download."
+          fi
+
+          if [ ! -f "$WEB_ROOT/wp-config.php" ]; then
+            wp config create \
+              --path="$WEB_ROOT" \
+              --dbname="$(dbName)" \
+              --dbuser="$(dbUser)" \
+              --dbpass="${DB_PASSWORD}" \
+              --dbhost="$(dbHost)" \
+              --allow-root
+          fi
+
+          chown -R www-data:www-data "$WEB_ROOT"
+          find "$WEB_ROOT" -type d -exec chmod 755 {} +
+          find "$WEB_ROOT" -type f -exec chmod 644 {} +
+          chmod 600 "$WEB_ROOT/wp-config.php"
+      env:
+        DB_PASSWORD: $(dbPassword)
+
+    # ── Step 5: Write and enable Nginx vhost ───────────────────────────────────
+    - task: SSH@0
+      displayName: Configure Nginx Vhost for WordPress
+      condition: eq('${{ parameters.dryRunOnly }}', 'false')
+      inputs:
+        sshEndpoint: $(sshServiceConnection)
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+
+          CONF="$(serverNginxSitesAvailable)/$(siteDomain).conf"
+
+          cat > "$CONF" <<'NGINX'
+          server {
+              listen 80;
+              listen [::]:80;
+
+              server_name $(siteDomain) www.$(siteDomain);
+              root $(serverWebRoot);
+              index index.php index.html;
+
+              # Logging
+              access_log /var/log/nginx/$(siteDomain).access.log;
+              error_log  /var/log/nginx/$(siteDomain).error.log;
+
+              # Security headers
+              add_header X-Frame-Options "SAMEORIGIN";
+              add_header X-Content-Type-Options "nosniff";
+              add_header X-XSS-Protection "1; mode=block";
+
+              # WordPress pretty permalinks
+              location / {
+                  try_files $uri $uri/ /index.php?$args;
+              }
+
+              # PHP-FPM
+              location ~ \.php$ {
+                  include snippets/fastcgi-php.conf;
+                  fastcgi_pass $(phpFpmSocket);
+              }
+
+              # Deny access to sensitive files
+              location ~ /\.ht           { deny all; }
+              location = /wp-config.php  { deny all; }
+              location ~* /(?:uploads|files)/.*\.php$ { deny all; }
+
+              # Static asset caching
+              location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+                  expires 30d;
+                  log_not_found off;
+              }
+
+              # Increase upload size
+              client_max_body_size 64M;
+          }
+          NGINX
+
+          ln -sf "$CONF" "$(serverNginxSitesEnabled)/$(siteDomain).conf"
+          nginx -t
+          systemctl reload nginx
+          echo "Nginx vhost configured for $(siteDomain)."
+
+    - bash: |
+        echo "[DRY RUN] Would provision WordPress site for $(siteDomain) at $(serverWebRoot)."
+        echo "[DRY RUN] Database: $(dbName) | User: $(dbUser) | Host: $(dbHost)"
+      displayName: Dry Run Summary
+      condition: eq('${{ parameters.dryRunOnly }}', 'true')
