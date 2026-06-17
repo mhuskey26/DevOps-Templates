@@ -1,0 +1,19 @@
+replicaCount: 2
+
+image:
+  repository: mydemoacr.azurecr.io/hello-aks   # overridden by CI with --set
+  tag: latest
+  pullPolicy: Always
+
+service:
+  type: LoadBalancer
+  port: 80
+  targetPort: 80
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi

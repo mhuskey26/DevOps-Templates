@@ -1,0 +1,6 @@
+apiVersion: v2
+name: hello-aks
+description: Simple Nginx demo app deployed to AKS via Helm
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

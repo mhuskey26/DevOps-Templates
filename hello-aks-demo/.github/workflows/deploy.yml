@@ -1,0 +1,71 @@
+name: Build and Deploy to AKS
+
+on:
+  push:
+    branches: [main]
+
+env:
+  ACR_NAME: mydemoacr
+  IMAGE_NAME: hello-aks
+  RESOURCE_GROUP: rg-aks-demo
+  AKS_CLUSTER: aks-demo
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required for OIDC auth
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push image to ACR
+        run: |
+          az acr build \
+            --registry $ACR_NAME \
+            --image $IMAGE_NAME:${{ github.sha }} \
+            --image $IMAGE_NAME:latest \
+            .
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group $RESOURCE_GROUP \
+            --name $AKS_CLUSTER \
+            --overwrite-existing
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+
+      - name: Helm upgrade / install
+        run: |
+          helm upgrade --install hello-aks ./charts/hello-aks \
+            --set image.repository=$ACR_NAME.azurecr.io/$IMAGE_NAME \
+            --set image.tag=${{ github.sha }} \
+            --namespace demo --create-namespace \
+            --wait --timeout 3m
